@@ -21,22 +21,26 @@ function mergeStyles(stylesFolder, outputFolder, outputFile) {
         console.error("Ошибка создания папки:", err);
         return;
       }
-      // считать и обьеденить стили
-      const mergedStyles = cssFiles
-        .map((file) =>
-          fs.readFileSync(path.join(stylesFolder, file.name), "utf-8")
-        )
-        .join("\n");
-      // записать стили в файл
-      fs.writeFile(path.join(outputFolder, outputFile), mergedStyles, (err) => {
-        if (err) {
-          console.error("Ошибка записи:", err);
-          return;
-        }
-        console.log("Создано файл bundle.css с обьедененными стилями");
+      // обьеденить стили
+      const readPromises = cssFiles.map((file) => {
+        const filePath = path.join(stylesFolder, file.name);
+        return fs.promises.readFile(filePath, "utf-8");
       });
+
+      Promise.all(readPromises)
+        .then((styles) => styles.join("\n"))
+        .then((mergedStyles) => {
+          // записать стили в файл
+          const outputPath = path.join(outputFolder, outputFile);
+          return fs.promises.writeFile(outputPath, mergedStyles);
+        })
+        .then(() => {
+          console.log("Создан файл bundle.css с объединенными стилями");
+        })
+        .catch((err) => {
+          console.error("Ошибка записи:", err);
+        });
     });
   });
 }
-
 mergeStyles(stylesFolderPath, outputFolderPath, outputFile);
