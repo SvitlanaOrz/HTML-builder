@@ -2,98 +2,128 @@ const fs = require("fs");
 const path = require("path");
 const fsPromises = fs.promises;
 
-const componentsDir = path.join(__dirname, "components");
-const templatePath = path.join(__dirname, "template.html");
-const outputPath = path.join(__dirname, "project-dist", "index.html");
+const stylesFolderPath = path.join(__dirname, "styles");
+const outputFolderPath = path.join(__dirname, "project-dist");
+const outputFile = "bundle.css";
 
-fs.readFile(templatePath, "utf8", (err, templateContent) => {
-  if (err) {
-    console.error("Ошибка чтения шаблона:", err);
-    return;
+function mergeStyles(stylesFolder, outputFolder, outputFile) {
+  fsPromises
+    .mkdir(outputFolder, { recursive: true })
+    .then(() => {
+      return fsPromises.readdir(stylesFolder, { withFileTypes: true });
+    })
+    .then((files) => {
+      const cssFiles = files.filter(
+        (file) => file.isFile() && path.extname(file.name) === ".css"
+      );
+      const readPromises = cssFiles.map((file) => {
+        const filePath = path.join(stylesFolder, file.name);
+        return fsPromises.readFile(filePath, "utf-8");
+      });
+      return Promise.all(readPromises);
+    })
+    .then((fileContents) => {
+      const mergedStyles = fileContents.join("\n");
+      const outputPath = path.join(outputFolder, outputFile);
+      return fsPromises.writeFile(outputPath, mergedStyles);
+    })
+    .then(() => {
+      console.log("Создано файл bundle.css с объединенными стилями");
+    })
+    .catch((err) => {
+      console.error("Ошибка:", err);
+    });
+}
+
+async function copyAssets() {
+  const assetsFolder = path.join(__dirname, "assets");
+  const outputAssetsFolder = path.join(outputFolderPath, "assets");
+
+  try {
+    await fsPromises.mkdir(outputAssetsFolder, { recursive: true });
+    const files = await fsPromises.readdir(assetsFolder);
+
+    for (const file of files) {
+      const sourcePath = path.join(assetsFolder, file);
+      const destPath = path.join(outputAssetsFolder, file);
+
+      const stat = await fsPromises.stat(sourcePath);
+      if (stat.isDirectory()) {
+        await fsPromises.mkdir(destPath, { recursive: true });
+        await copyDirectory(sourcePath, destPath);
+      } else {
+        await fsPromises.copyFile(sourcePath, destPath);
+      }
+    }
+    console.log("Ресурсы успешно скопированы.");
+  } catch (err) {
+    console.error("Ошибка при копировании ресурсов:", err);
+  }
+}
+
+async function replaceTags(content) {
+  const tagRegex = /\{\{(\w+)\}\}/g;
+  let replacedContent = content;
+
+  for await (const match of content.matchAll(tagRegex)) {
+    const tagName = match[1];
+    const componentPath = path.join(__dirname, "components", `${tagName}.html`);
+
+    try {
+      const componentContent = await fsPromises.readFile(componentPath, "utf8");
+      replacedContent = replacedContent.replace(match[0], componentContent);
+    } catch (err) {
+      console.error(`Ошибка при чтении компонента ${tagName}.html:`, err);
+    }
   }
 
-  const replaceTags = (content, callback) => {
-    const tagRegex = /\{\{(\w+)\}\}/g;
-    let componentCount = 0;
-    return content.replace(tagRegex, (match, tagName) => {
-      const componentPath = path.join(componentsDir, `${tagName}.html`);
-      if (!fs.existsSync(componentPath)) {
-        console.error(`Компонент "${tagName}" не найден.`);
-        return match;
+  return replacedContent;
+}
+
+async function generateIndexHtml() {
+  try {
+    const templateContent = await fsPromises.readFile(
+      path.join(__dirname, "template.html"),
+      "utf8"
+    );
+    const replacedContent = await replaceTags(templateContent);
+    await fsPromises.writeFile(
+      path.join(outputFolderPath, "index.html"),
+      replacedContent,
+      "utf8"
+    );
+  } catch (err) {
+    console.error("Ошибка при генерации index.html:", err);
+  }
+}
+async function copyDirectory(source, destination) {
+  try {
+    const files = await fsPromises.readdir(source);
+    for (const file of files) {
+      const sourcePath = path.join(source, file);
+      const destPath = path.join(destination, file);
+
+      const stat = await fsPromises.stat(sourcePath);
+      if (stat.isDirectory()) {
+        await fsPromises.mkdir(destPath, { recursive: true });
+        await copyDirectory(sourcePath, destPath);
+      } else {
+        await fsPromises.copyFile(sourcePath, destPath);
       }
+    }
+  } catch (err) {
+    console.error("Ошибка при копировании ресурсов:", err);
+  }
+}
 
-      componentCount++;
-      fs.readFile(componentPath, "utf8", (err, componentContent) => {
-        if (err) {
-          console.error(`Ошибка чтения компонента "${tagName}":`, err);
-          return;
-        }
-        content = content.replace(match, componentContent);
-        componentCount--;
-        if (componentCount === 0) {
-          callback(content);
-        }
-      });
-      return match;
-    });
-  };
+async function main() {
+  try {
+    await mergeStyles(stylesFolderPath, outputFolderPath, outputFile);
+    await copyAssets();
+    await generateIndexHtml();
+  } catch (err) {
+    console.error("Ошибка при выполнении основной функции:", err);
+  }
+}
 
-  replaceTags(templateContent, (content) => {
-    fsPromises
-      .mkdir(path.join(__dirname, `project-dist`), { recursive: true })
-      .then(() => {
-        const promises = [];
-
-        promises.push(
-          fsPromises.writeFile(
-            path.join(__dirname, "project-dist", "index.html"),
-            content,
-            "utf8"
-          )
-        );
-        promises.push(
-          fsPromises.writeFile(
-            path.join(__dirname, "project-dist", "style.css"),
-            "",
-            "utf8"
-          )
-        );
-
-        const assetsDir = path.join(__dirname, "project-dist", "assets");
-        promises.push(fsPromises.mkdir(assetsDir, { recursive: true }));
-        const srcAssetsDir = path.join(__dirname, "assets");
-
-        promises.push(
-          fsPromises.readdir(srcAssetsDir).then((files) => {
-            const filePromises = [];
-            files.forEach((file) => {
-              const srcDir = path.join(srcAssetsDir, file);
-              const destDir = path.join(assetsDir, file);
-              filePromises.push(fsPromises.mkdir(destDir, { recursive: true }));
-              filePromises.push(
-                fsPromises.readdir(srcDir).then((filesT) => {
-                  filesT.forEach((fileT) => {
-                    const srcPath = path.join(srcDir, fileT);
-                    const destPath = path.join(destDir, fileT);
-                    filePromises.push(fsPromises.copyFile(srcPath, destPath));
-                  });
-                })
-              );
-            });
-            return Promise.all(filePromises);
-          })
-        );
-
-        Promise.all(promises)
-          .then(() => {
-            console.log("Все файлы успешно записаны в project-dist.");
-          })
-          .catch((err) => {
-            console.error("Ошибка записи файлов:", err);
-          });
-      })
-      .catch((err) => {
-        console.error("Ошибка создания папки project-dist:", err);
-      });
-  });
-});
+main();
